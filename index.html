@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="da">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LEGO Cloud</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <script>
+      window.LEGO_APP_CONFIG = {
+        rebrickableApiKey: "8857d25575ea15728ea9661e0397b116",
+        supabase: {
+          url: "https://nkcsgojglyindmxsrivn.supabase.co",
+          anonKey: "sb_publishable_B__Di3B40XPo4q_PbKHzDw_Y3YY-w_x",
+          manualBucket: "manuals"
+        }
+      };
+    </script>
+    <div id="app"></div>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,17 @@
+<svg width="160" height="40" viewBox="0 0 160 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect x="4" y="12" width="26" height="18" rx="4" fill="#D62828"/>
+  <rect x="24" y="12" width="26" height="18" rx="4" fill="#D62828"/>
+  <rect x="44" y="12" width="26" height="18" rx="4" fill="#D62828"/>
+  <circle cx="12" cy="12" r="4" fill="#F26C6C"/>
+  <circle cx="22" cy="12" r="4" fill="#F26C6C"/>
+  <circle cx="32" cy="12" r="4" fill="#F26C6C"/>
+  <circle cx="42" cy="12" r="4" fill="#F26C6C"/>
+  <circle cx="52" cy="12" r="4" fill="#F26C6C"/>
+  <circle cx="62" cy="12" r="4" fill="#F26C6C"/>
+  <path d="M82 26V14H90V17H86V26H82Z" fill="#1F1D1A"/>
+  <path d="M93 26V14H101.5C104.2 14 106 15.6 106 18.1C106 19.9 105.1 21.2 103.5 21.8L106.6 26H102.1L99.6 22.4H97V26H93ZM97 19.4H100.7C101.5 19.4 102 18.9 102 18.1C102 17.3 101.5 16.9 100.7 16.9H97V19.4Z" fill="#1F1D1A"/>
+  <path d="M110 26V14H114V26H110Z" fill="#1F1D1A"/>
+  <path d="M118 26V14H127.3V17H122V18.7H127V21.6H122V23H127.5V26H118Z" fill="#1F1D1A"/>
+  <path d="M131 26V14H135L140.1 20.5V14H144V26H140.1L134.9 19.6V26H131Z" fill="#1F1D1A"/>
+  <path d="M148 26V14H152V26H148Z" fill="#1F1D1A"/>
+</svg>

@@ -20,6 +20,25 @@ Projektet er lavet uden build-step.
 4. Opret en public Supabase Storage bucket med navnet `manuals`, hvis du vil dele egne PDF-manualer mellem enheder.
 5. Appen kan deployes direkte som statisk site (fx GitHub Pages eller Vercel).
 
+## Vercel deploy (anbefalet)
+
+Projektet er en ren statisk app uden build-step.
+
+1. Gå til Vercel Dashboard og vælg `Add New...` -> `Project`.
+2. Forbind din GitHub konto og vælg repoet `simonvever-sys/Lego-Cloud-`.
+3. Build settings:
+   - Framework Preset: `Other`
+   - Build Command: tom
+   - Output Directory: tom (root)
+4. Klik `Deploy`.
+5. Vercel giver en live URL på formen `https://<project-name>.vercel.app`.
+
+Efter første deploy:
+- Hver gang du laver `git push` til branchen, laver Vercel automatisk ny deploy.
+- I Vercel kan du se status under `Deployments`.
+
+`vercel.json` er tilføjet for at sikre statisk routing uden server.
+
 ## Struktur
 
 - [index.html](/Users/simonvever/Desktop/Lego%20cloud/index.html): app-shell

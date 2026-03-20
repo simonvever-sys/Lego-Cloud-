@@ -36,6 +36,10 @@ const ROUTE_KEY = "lego-cloud:route";
 const PROFILE_KEY = "lego-cloud:active-profile";
 const SEARCH_QUERY_KEY = "lego-cloud:search-query";
 const SEARCH_RESULTS_KEY = "lego-cloud:search-results";
+const CLOUD_REFRESH_INTERVAL_MS = 45000;
+const CLOUD_REFRESH_MIN_GAP_MS = 15000;
+const SEARCH_TERM_DELAY_MS = 350;
+const CLOUD_FETCH_DELAY_MS = 180;
 const PROFILES = [
   {
     id: "family",
@@ -191,7 +195,8 @@ createApp({
       stopCollectionSync: null,
       stopMissingPartsSync: null,
       cloudRefreshTimer: null,
-      cloudRefreshInFlight: false
+      cloudRefreshInFlight: false,
+      cloudLastRefreshAt: 0
     };
   },
   computed: {
@@ -369,9 +374,7 @@ createApp({
       localStorage.removeItem(PROFILE_KEY);
     }
     await resetCollectionOnce();
-    this.sets = (await loadCollection()).map((setItem) => this.normalizeSetOwnership(setItem, setItem.ownerProfile));
-    this.sales = deriveSalesFromSets(this.sets);
-    this.missingParts = await loadMissingParts();
+    await this.refreshCloudState(true);
     this.startRealtimeSync();
     await this.restoreRoute();
     window.addEventListener("hashchange", this.restoreRoute);
@@ -383,19 +386,30 @@ createApp({
     document.removeEventListener("visibilitychange", this.handleVisibilitySync);
   },
   methods: {
-    async refreshCloudState() {
-      if (!hasSupabaseConfig() || this.cloudRefreshInFlight) {
+    delay(ms) {
+      return new Promise((resolve) => window.setTimeout(resolve, ms));
+    },
+    async refreshCloudState(force = false) {
+      if (this.cloudRefreshInFlight) {
+        return;
+      }
+
+      const now = Date.now();
+      if (!force && now - this.cloudLastRefreshAt < CLOUD_REFRESH_MIN_GAP_MS) {
         return;
       }
 
       this.cloudRefreshInFlight = true;
 
       try {
-        const [collection, missingParts] = await Promise.all([loadCollection(), loadMissingParts()]);
+        const collection = await loadCollection();
+        await this.delay(CLOUD_FETCH_DELAY_MS);
+        const missingParts = await loadMissingParts();
         this.sets = collection.map((setItem) => this.normalizeSetOwnership(setItem, setItem.ownerProfile));
         this.syncActiveSet(this.sets);
         this.sales = deriveSalesFromSets(this.sets);
         this.missingParts = Array.isArray(missingParts) ? missingParts : [];
+        this.cloudLastRefreshAt = Date.now();
       } finally {
         this.cloudRefreshInFlight = false;
       }
@@ -507,8 +521,10 @@ createApp({
       });
 
       this.cloudRefreshTimer = window.setInterval(() => {
-        this.refreshCloudState();
-      }, 3000);
+        if (document.visibilityState === "visible") {
+          this.refreshCloudState();
+        }
+      }, CLOUD_REFRESH_INTERVAL_MS);
     },
     stopRealtimeSync() {
       if (typeof this.stopCollectionSync === "function") {
@@ -526,7 +542,7 @@ createApp({
     },
     async handleVisibilitySync() {
       if (document.visibilityState === "visible") {
-        await this.refreshCloudState();
+        await this.refreshCloudState(true);
       }
     },
     setRoute(path) {
@@ -863,11 +879,23 @@ createApp({
 
       try {
         const terms = this.expandSetSearchTerms(query);
-        const termSettled = await Promise.allSettled(terms.map((term) => rebrickableClient.searchSets(term, 60)));
-        const themeResults = await rebrickableClient.searchSetsByThemeName(query, 120).catch(() => []);
-        const termResults = termSettled
-          .filter((entry) => entry.status === "fulfilled")
-          .map((entry) => entry.value);
+        const termResults = [];
+        let hadTermRequestFailure = false;
+
+        for (const term of terms) {
+          try {
+            termResults.push(await rebrickableClient.searchSets(term, 45));
+          } catch {
+            hadTermRequestFailure = true;
+          }
+          await this.delay(SEARCH_TERM_DELAY_MS);
+        }
+
+        let themeResults = [];
+        if (termResults.flat().length < 40) {
+          themeResults = await rebrickableClient.searchSetsByThemeName(query, 90).catch(() => []);
+        }
+
         const deduped = new Map();
         [...termResults.flat(), ...themeResults].forEach((item) => {
           const key = item.rebrickableSetNumber || item.setNumber;
@@ -882,7 +910,7 @@ createApp({
         });
 
         this.searchResults = this.rankSetResultsByQuery([...deduped.values()], query).slice(0, 80);
-        if (!this.searchResults.length && termSettled.some((entry) => entry.status === "rejected")) {
+        if (!this.searchResults.length && hadTermRequestFailure) {
           this.searchError = "Søgningen havde forbindelsesfejl. Prøv igen om et øjeblik.";
         }
       } catch {
@@ -977,7 +1005,7 @@ createApp({
         .filter((token) => token.length >= 3)
         .forEach((token) => terms.add(token));
 
-      return [...terms].filter(Boolean).slice(0, 14);
+      return [...terms].filter(Boolean).slice(0, 5);
     },
     rankSetResultsByQuery(results, query) {
       const normalizedQuery = this.normalizeSearchText(query);

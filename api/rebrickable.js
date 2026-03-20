@@ -5,6 +5,9 @@ const PART_PLACEHOLDER = "/images/part-placeholder.png";
 const REQUEST_TIMEOUT_MS = 10000;
 const REQUEST_RETRY_ATTEMPTS = 2;
 const RETRY_STATUS_CODES = new Set([408, 425, 429, 500, 502, 503, 504]);
+const REQUEST_MIN_INTERVAL_MS = 650;
+const API_CACHE_PREFIX = "api-response";
+const DEFAULT_API_CACHE_TTL_MS = 1000 * 60 * 60 * 6;
 
 export function normalizeSetNumber(setNumber) {
   const compact = String(setNumber || "").trim().replace(/\s+/g, "");
@@ -74,6 +77,60 @@ function writeCache(key, payload) {
 
 export function createRebrickableClient(apiKey = getDefaultApiKey()) {
   let proxyState = "unknown";
+  let requestQueue = Promise.resolve();
+  let lastRequestStartedAt = 0;
+  const inFlightRequestCache = new Map();
+
+  function getRequestCacheKey(path) {
+    return getCacheKey(API_CACHE_PREFIX, path);
+  }
+
+  function readTimedCache(key) {
+    const payload = readCache(key);
+    if (!payload || typeof payload !== "object") {
+      return null;
+    }
+
+    if (payload.expiresAt && Date.now() > payload.expiresAt) {
+      return null;
+    }
+
+    return payload.data;
+  }
+
+  function writeTimedCache(key, data, ttlMs = DEFAULT_API_CACHE_TTL_MS) {
+    writeCache(key, {
+      data,
+      expiresAt: Date.now() + Math.max(0, Number(ttlMs) || 0)
+    });
+  }
+
+  function enqueueRequest(task) {
+    const runTask = async () => {
+      const elapsed = Date.now() - lastRequestStartedAt;
+      const waitMs = Math.max(0, REQUEST_MIN_INTERVAL_MS - elapsed);
+      if (waitMs > 0) {
+        await delay(waitMs);
+      }
+      lastRequestStartedAt = Date.now();
+      return task();
+    };
+
+    const scheduled = requestQueue.then(runTask, runTask);
+    requestQueue = scheduled.catch(() => {});
+    return scheduled;
+  }
+
+  function resolveCacheTtl(path) {
+    if (
+      path.startsWith("/sets/?search=") ||
+      path.startsWith("/parts/?search=") ||
+      path.startsWith("/themes/?search=")
+    ) {
+      return 1000 * 60 * 20;
+    }
+    return DEFAULT_API_CACHE_TTL_MS;
+  }
 
   function delay(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -130,104 +187,132 @@ export function createRebrickableClient(apiKey = getDefaultApiKey()) {
     }
   }
 
-  async function request(path) {
-    const proxyBaseUrl = getProxyBaseUrl();
-    const anonKey =
-      typeof window !== "undefined" ? window.LEGO_APP_CONFIG?.supabase?.anonKey || "" : "";
-
-    async function requestViaProxy() {
-      const headers = {};
-      if (anonKey) {
-        headers.apikey = anonKey;
-        headers.Authorization = `Bearer ${anonKey}`;
+  async function request(path, options = {}) {
+    const {
+      cache = true,
+      cacheTtlMs = resolveCacheTtl(path)
+    } = options;
+    const cacheKey = getRequestCacheKey(path);
+    if (cache) {
+      const cached = readTimedCache(cacheKey);
+      if (cached) {
+        return cached;
       }
-
-      const response = await fetchWithRetry(`${proxyBaseUrl}?path=${encodeURIComponent(path)}`, {
-        headers
-      });
-      if (response.status === 404) {
-        proxyState = "missing";
-        throw new Error("LEGO proxyen mangler i Supabase.");
-      }
-      proxyState = "ok";
-      return response;
     }
 
-    async function requestDirect() {
-      if (!apiKey) {
-        throw new Error("LEGO API-nøglen mangler.");
-      }
+    const inFlightKey = `${path}:${cache ? "cache" : "no-cache"}`;
+    if (inFlightRequestCache.has(inFlightKey)) {
+      return inFlightRequestCache.get(inFlightKey);
+    }
 
-      // Prøv først standard auth-header.
-      const headerResponse = await fetchWithRetry(`${API_BASE}${path}`, {
-        headers: {
-          Authorization: "key " + apiKey
+    const responsePromise = enqueueRequest(async () => {
+      const proxyBaseUrl = getProxyBaseUrl();
+      const anonKey =
+        typeof window !== "undefined" ? window.LEGO_APP_CONFIG?.supabase?.anonKey || "" : "";
+
+      async function requestViaProxy() {
+        const headers = {};
+        if (anonKey) {
+          headers.apikey = anonKey;
+          headers.Authorization = `Bearer ${anonKey}`;
         }
-      });
-      if (headerResponse.ok) {
-        return headerResponse;
+
+        const response = await fetchWithRetry(`${proxyBaseUrl}?path=${encodeURIComponent(path)}`, {
+          headers
+        });
+        if (response.status === 404) {
+          proxyState = "missing";
+          throw new Error("LEGO proxyen mangler i Supabase.");
+        }
+        proxyState = "ok";
+        return response;
       }
-      if (headerResponse.status !== 401 && headerResponse.status !== 403) {
-        return headerResponse;
-      }
 
-      // Fallback: nogle miljøer fungerer bedre med key i query-string.
-      const delimiter = path.includes("?") ? "&" : "?";
-      return fetchWithRetry(`${API_BASE}${path}${delimiter}key=${encodeURIComponent(apiKey)}`);
-    }
+      async function requestDirect() {
+        if (!apiKey) {
+          throw new Error("LEGO API-nøglen mangler.");
+        }
 
-    let response;
-    let lastFailure = null;
-
-    try {
-      if (proxyBaseUrl && proxyState !== "missing") {
-        try {
-          response = await requestViaProxy();
-        } catch (error) {
-          lastFailure = error;
-          if (apiKey) {
-            response = await requestDirect();
-          } else {
-            throw error;
+        // Prøv først standard auth-header.
+        const headerResponse = await fetchWithRetry(`${API_BASE}${path}`, {
+          headers: {
+            Authorization: "key " + apiKey
           }
+        });
+        if (headerResponse.ok) {
+          return headerResponse;
+        }
+        if (headerResponse.status !== 401 && headerResponse.status !== 403) {
+          return headerResponse;
         }
 
-        if (!response.ok && apiKey) {
+        // Fallback: nogle miljøer fungerer bedre med key i query-string.
+        const delimiter = path.includes("?") ? "&" : "?";
+        return fetchWithRetry(`${API_BASE}${path}${delimiter}key=${encodeURIComponent(apiKey)}`);
+      }
+
+      let response;
+      let lastFailure = null;
+
+      try {
+        if (proxyBaseUrl && proxyState !== "missing") {
           try {
-            const directResponse = await requestDirect();
-            response = directResponse;
+            response = await requestViaProxy();
           } catch (error) {
             lastFailure = error;
-            // Behold proxy-responsen, så den normale fejlhåndtering kan vise korrekt status.
+            if (apiKey) {
+              response = await requestDirect();
+            } else {
+              throw error;
+            }
           }
+
+          if (!response.ok && apiKey) {
+            try {
+              const directResponse = await requestDirect();
+              response = directResponse;
+            } catch (error) {
+              lastFailure = error;
+              // Behold proxy-responsen, så den normale fejlhåndtering kan vise korrekt status.
+            }
+          }
+        } else {
+          response = await requestDirect();
         }
-      } else {
-        response = await requestDirect();
-      }
-    } catch (error) {
-      const reason = String(error?.message || "").trim();
-      if (reason) {
-        throw new Error(reason);
-      }
-      throw lastFailure || new Error("Forbindelsen til LEGO databasen fejlede.");
-    }
-
-    if (!response.ok) {
-      if (response.status === 401 || response.status === 403) {
-        if (proxyState === "missing") {
-          throw new Error("LEGO proxyen mangler, og direkte adgang til LEGO databasen blev afvist.");
+      } catch (error) {
+        const reason = String(error?.message || "").trim();
+        if (reason) {
+          throw new Error(reason);
         }
-        throw new Error("LEGO databasen afviste forbindelsen.");
+        throw lastFailure || new Error("Forbindelsen til LEGO databasen fejlede.");
       }
 
-      if (response.status === 404) {
-        throw new Error("Sæt ikke fundet i LEGO databasen.");
+      if (!response.ok) {
+        if (response.status === 401 || response.status === 403) {
+          if (proxyState === "missing") {
+            throw new Error("LEGO proxyen mangler, og direkte adgang til LEGO databasen blev afvist.");
+          }
+          throw new Error("LEGO databasen afviste forbindelsen.");
+        }
+
+        if (response.status === 404) {
+          throw new Error("Sæt ikke fundet i LEGO databasen.");
+        }
+
+        throw new Error("Kunne ikke hente LEGO data.");
       }
 
-      throw new Error("Kunne ikke hente LEGO data.");
-    }
+      const data = await response.json();
+      if (cache) {
+        writeTimedCache(cacheKey, data, cacheTtlMs);
+      }
+      return data;
+    }).finally(() => {
+      inFlightRequestCache.delete(inFlightKey);
+    });
 
-    return response.json();
+    inFlightRequestCache.set(inFlightKey, responsePromise);
+    return responsePromise;
   }
 
   function normalizeSetPart(item, setNumber) {

@@ -8,6 +8,24 @@ function buildCorsHeaders(origin: string | null) {
   };
 }
 
+function normalizeSetNumber(raw: string) {
+  const compact = String(raw || "").trim().replace(/\s+/g, "");
+  if (!compact) {
+    return "";
+  }
+  return compact.includes("-") ? compact : `${compact}-1`;
+}
+
+function jsonResponse(payload: unknown, status: number, corsHeaders: Record<string, string>) {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: {
+      ...corsHeaders,
+      "Content-Type": "application/json"
+    }
+  });
+}
+
 Deno.serve(async (request) => {
   const corsHeaders = buildCorsHeaders(request.headers.get("origin"));
 
@@ -17,41 +35,63 @@ Deno.serve(async (request) => {
 
   const apiKey = Deno.env.get("REBRICKABLE_API_KEY");
   if (!apiKey) {
-    return new Response(JSON.stringify({ error: "Missing REBRICKABLE_API_KEY" }), {
-      status: 500,
-      headers: {
-        ...corsHeaders,
-        "Content-Type": "application/json"
-      }
-    });
+    return jsonResponse({ error: "Missing REBRICKABLE_API_KEY" }, 500, corsHeaders);
   }
 
   const url = new URL(request.url);
-  const path = url.searchParams.get("path") || "";
+  const pathParam = url.searchParams.get("path") || "";
+  const setNumberParam = url.searchParams.get("setNumber") || "";
+  const endpoint = (url.searchParams.get("endpoint") || "set").toLowerCase();
+  const page = Math.max(1, Number(url.searchParams.get("page")) || 1);
+  const pageSize = Math.max(1, Number(url.searchParams.get("page_size")) || 50);
 
-  if (!path.startsWith("/")) {
-    return new Response(JSON.stringify({ error: "Invalid path" }), {
-      status: 400,
-      headers: {
-        ...corsHeaders,
-        "Content-Type": "application/json"
-      }
-    });
+  let path = pathParam;
+
+  // New shorthand mode:
+  // /functions/v1/rebrickable-proxy?setNumber=42009
+  // /functions/v1/rebrickable-proxy?setNumber=42009&endpoint=parts&page=1&page_size=50
+  if (!path && setNumberParam) {
+    const normalized = normalizeSetNumber(setNumberParam);
+    if (!normalized) {
+      return jsonResponse({ error: "Invalid setNumber" }, 400, corsHeaders);
+    }
+
+    if (endpoint === "parts") {
+      path = `/sets/${encodeURIComponent(normalized)}/parts/?page=${page}&page_size=${pageSize}`;
+    } else {
+      path = `/sets/${encodeURIComponent(normalized)}/`;
+    }
   }
 
-  const upstream = await fetch(`${API_BASE}${path}`, {
-    headers: {
-      Authorization: `key ${apiKey}`
-    }
-  });
+  if (!path.startsWith("/")) {
+    return jsonResponse(
+      { error: "Invalid request. Use either ?path=/sets/... or ?setNumber=1234" },
+      400,
+      corsHeaders
+    );
+  }
 
-  const body = await upstream.text();
+  try {
+    const upstream = await fetch(`${API_BASE}${path}`, {
+      headers: {
+        Authorization: `key ${apiKey}`
+      }
+    });
 
-  return new Response(body, {
-    status: upstream.status,
-    headers: {
-      ...corsHeaders,
-      "Content-Type": upstream.headers.get("Content-Type") || "application/json"
-    }
-  });
+    const body = await upstream.text();
+
+    return new Response(body, {
+      status: upstream.status,
+      headers: {
+        ...corsHeaders,
+        "Content-Type": upstream.headers.get("Content-Type") || "application/json"
+      }
+    });
+  } catch (error) {
+    return jsonResponse(
+      { error: "Proxy request failed", details: String(error?.message || error || "") },
+      502,
+      corsHeaders
+    );
+  }
 });

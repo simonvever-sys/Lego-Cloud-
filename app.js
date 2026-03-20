@@ -30,6 +30,7 @@ import { StatsPage } from "./pages/StatsPage.js";
 import { MissingPartsPage } from "./pages/MissingPartsPage.js";
 import { ProfileSelectPage } from "./pages/ProfileSelectPage.js";
 import { ImportCollectionPage } from "./pages/ImportCollectionPage.js";
+import { PickupListPage } from "./pages/PickupListPage.js";
 
 const rebrickableClient = createRebrickableClient();
 const ROUTE_KEY = "lego-cloud:route";
@@ -126,7 +127,8 @@ createApp({
     StatsPage,
     MissingPartsPage,
     ProfileSelectPage,
-    ImportCollectionPage
+    ImportCollectionPage,
+    PickupListPage
   },
   data() {
     return {
@@ -142,10 +144,11 @@ createApp({
         { id: "home", label: "Forside", icon: "🏠" },
         { id: "collection", label: "Samling", icon: "📦" },
         { id: "search", label: "Søg", icon: "🔍" },
-        { id: "parts", label: "Klodser", icon: "🧩" },
+        { id: "pickup", label: "Til afhentning", icon: "📥" },
         { id: "drawer", label: "Menu", icon: "☰" }
       ],
       drawerItems: [
+        { id: "parts", label: "Klodser", icon: "🧩" },
         { id: "missing-parts", label: "Manglende klodser", icon: "🟧" },
         { id: "sales", label: "Salg", icon: "💰" },
         { id: "stats", label: "Statistik", icon: "📊" },
@@ -332,6 +335,7 @@ createApp({
         collection: "Min samling",
         search: "Søg",
         parts: "Klodser",
+        pickup: "Til afhentning",
         "missing-parts": "Manglende klodser",
         sales: "Salg",
         stats: "Statistik",
@@ -347,6 +351,41 @@ createApp({
       }
       const activeSetBase = this.getBaseSetNumber(this.activeSet.rebrickableSetNumber || this.activeSet.setNumber);
       return Boolean(activeSetBase && this.manualOpeningSetNumber === activeSetBase);
+    },
+    activeSetInPickupList() {
+      if (!this.activeSet) {
+        return false;
+      }
+      return this.isSetMarkedForPickup(this.activeSet) && !this.isSetMarkedAsPicked(this.activeSet);
+    },
+    visiblePickupList() {
+      const source =
+        this.activeProfileId && this.activeProfileId !== "family"
+          ? this.sets.filter((item) => item.ownerProfile === this.activeProfileId)
+          : this.sets;
+
+      return [...source].sort((left, right) => {
+        const leftChecked = this.isSetMarkedAsPicked(left);
+        const rightChecked = this.isSetMarkedAsPicked(right);
+        if (leftChecked !== rightChecked) {
+          return leftChecked ? 1 : -1;
+        }
+        return String(left.setNumber || "").localeCompare(String(right.setNumber || ""), "da");
+      })
+        .filter((item) => this.isSetMarkedForPickup(item))
+        .map((item) => {
+          const setNumber = item.rebrickableSetNumber || item.setNumber;
+          return {
+            id: item.collectionKey || this.profileCollectionKey(item.ownerProfile, setNumber),
+            ownerProfile: item.ownerProfile || "shared",
+            setNumber: item.setNumber,
+            rebrickableSetNumber: setNumber,
+            name: item.name,
+            image: item.image,
+            storageLocation: this.resolvePickupStorageLocation(item),
+            checked: this.isSetMarkedAsPicked(item)
+          };
+        });
     }
   },
   watch: {
@@ -386,6 +425,21 @@ createApp({
     document.removeEventListener("visibilitychange", this.handleVisibilitySync);
   },
   methods: {
+    scrollToTop() {
+      window.scrollTo({ top: 0, behavior: "auto" });
+    },
+    restoreScrollPosition(y = 0) {
+      const targetY = Math.max(0, Number(y) || 0);
+      this.$nextTick(() => {
+        window.requestAnimationFrame(() => {
+          window.scrollTo({ top: targetY, behavior: "auto" });
+          // En ekstra frame gør restore mere robust efter route/render-opdateringer.
+          window.requestAnimationFrame(() => {
+            window.scrollTo({ top: targetY, behavior: "auto" });
+          });
+        });
+      });
+    },
     delay(ms) {
       return new Promise((resolve) => window.setTimeout(resolve, ms));
     },
@@ -422,6 +476,84 @@ createApp({
       const value = match ? Number(match[1]) : 0;
       return value > 0 ? value : 1;
     },
+    extractMetaTokenFromNotes(notes, key) {
+      const match = String(notes || "").match(new RegExp(`\\[${key}:([^\\]]+)\\]`, "i"));
+      return match ? String(match[1] || "").trim() : "";
+    },
+    isTruthyMetaValue(value) {
+      return ["1", "true", "yes", "ja", "done"].includes(String(value || "").trim().toLowerCase());
+    },
+    withMetaTokenInNotes(notes, key, value) {
+      const cleaned = String(notes || "")
+        .replace(new RegExp(`\\s*\\[${key}:[^\\]]*\\]\\s*`, "gi"), " ")
+        .replace(/\s{2,}/g, " ")
+        .trim();
+      const normalizedValue = String(value || "").trim();
+      if (!normalizedValue) {
+        return cleaned;
+      }
+      return `${cleaned}${cleaned ? " " : ""}[${key}:${normalizedValue}]`.trim();
+    },
+    getSetCollectionKey(setItem) {
+      return (
+        setItem.collectionKey ||
+        this.profileCollectionKey(setItem.ownerProfile, setItem.rebrickableSetNumber || setItem.setNumber)
+      );
+    },
+    isSetMarkedForPickup(setItem) {
+      const token = this.extractMetaTokenFromNotes(setItem?.notes || "", "PICKUP");
+      return this.isTruthyMetaValue(token);
+    },
+    isSetMarkedAsPicked(setItem) {
+      const token = this.extractMetaTokenFromNotes(setItem?.notes || "", "PICKED");
+      return this.isTruthyMetaValue(token);
+    },
+    resolvePickupStorageLocation(setItem) {
+      const boxFromNotes = this.extractMetaTokenFromNotes(setItem?.notes || "", "BOX_LOC");
+      return boxFromNotes || this.normalizeLegacyBoxLocation(setItem?.storageLocation) || "Hjemme";
+    },
+    findSetByCollectionKey(collectionKey) {
+      return this.sets.find((item) => this.getSetCollectionKey(item) === collectionKey) || null;
+    },
+    async savePatchedSetByKey(collectionKey, patcher) {
+      const current = this.findSetByCollectionKey(collectionKey);
+      if (!current) {
+        return;
+      }
+
+      const previousSet = { ...current };
+      const nextCandidate = typeof patcher === "function" ? patcher(current) : { ...current, ...patcher };
+      const nextSet = this.normalizeSetOwnership(nextCandidate, current.ownerProfile);
+      const nextSets = this.sets.map((item) => (this.getSetCollectionKey(item) === collectionKey ? nextSet : item));
+
+      this.sets = nextSets;
+      this.syncActiveSet(nextSets);
+      this.sales = deriveSalesFromSets(nextSets);
+
+      await saveCollectionSet(nextSet, previousSet);
+    },
+    normalizeLegacyBoxLocation(storageLocation) {
+      const raw = String(storageLocation || "").trim();
+      if (!raw) {
+        return "";
+      }
+
+      if (/^hjemme$/i.test(raw)) {
+        return "Hjemme";
+      }
+
+      const poseMatch =
+        raw.match(/^pose\s*(\d{1,3})$/i) ||
+        raw.match(/^pose[-\s]*(\d{1,3})$/i) ||
+        raw.match(/^(s[æa]k|kasse)\s*(nr)?[-\s:]*?(\d{1,3})$/i) ||
+        raw.match(/^(\d{1,3})$/);
+      if (poseMatch) {
+        const number = Number(poseMatch[poseMatch.length - 1]);
+        return number > 0 ? `Pose ${number}` : "";
+      }
+
+      return "";
+    },
     stripQuantityToken(notes) {
       return String(notes || "")
         .replace(/\s*\[QTY:\d+\]\s*/gi, " ")
@@ -437,16 +569,23 @@ createApp({
       const ownerProfile = setItem.ownerProfile || fallbackOwnerProfile;
       const setNumber = setItem.rebrickableSetNumber || setItem.setNumber;
       const quantityOwned = Math.max(1, Number(setItem.quantityOwned) || this.parseQuantityFromNotes(setItem.notes));
+      const existingNotes = String(setItem.notes || "");
+      const boxFromNotes = this.extractMetaTokenFromNotes(existingNotes, "BOX_LOC");
+      const legacyBoxLocation = boxFromNotes || this.normalizeLegacyBoxLocation(setItem.storageLocation);
+      let normalizedNotes = this.embedQuantityInNotes(existingNotes, quantityOwned);
+      if (legacyBoxLocation) {
+        normalizedNotes = this.withMetaTokenInNotes(normalizedNotes, "BOX_LOC", legacyBoxLocation);
+      }
       return {
         ...setItem,
         ownerProfile,
         collectionKey: setItem.collectionKey || this.profileCollectionKey(ownerProfile, setNumber),
-        storageLocation: setItem.storageLocation || "",
+        storageLocation: /^lager$/i.test(String(setItem.storageLocation || "").trim()) ? "Lager" : "Hjemme",
         image: this.resolveSetImage(setItem),
         askingPrice: Number(setItem.askingPrice) || 0,
         salePlatforms: Array.isArray(setItem.salePlatforms) ? setItem.salePlatforms : [],
         quantityOwned,
-        notes: this.embedQuantityInNotes(setItem.notes || "", quantityOwned)
+        notes: normalizedNotes
       };
     },
     findSetInCollection(requestedSetNumber, profileId = "") {
@@ -567,6 +706,7 @@ createApp({
           const setItem = localSet ? this.mergeSetWithRemoteMetadata(localSet, remoteSet) : remoteSet;
           this.activeSet = this.normalizeSetOwnership(setItem, localSet?.ownerProfile || this.activeProfileId || "shared");
           this.currentView = "detail";
+          this.$nextTick(() => this.scrollToTop());
           this.setPartsRequested = false;
           this.setParts = [];
           this.setPartsPage = 0;
@@ -577,6 +717,7 @@ createApp({
           if (localSet) {
             this.activeSet = this.normalizeSetOwnership(localSet, localSet.ownerProfile || this.activeProfileId || "shared");
             this.currentView = "detail";
+            this.$nextTick(() => this.scrollToTop());
             this.setPartsRequested = false;
             this.setParts = [];
             this.setPartsPage = 0;
@@ -595,6 +736,7 @@ createApp({
         "/collection",
         "/search",
         "/parts",
+        "/pickup",
         "/missing-parts",
         "/sales",
         "/stats",
@@ -614,6 +756,73 @@ createApp({
       this.drawerOpen = false;
       this.currentView = viewId;
       this.setRoute(`/${viewId}`);
+    },
+    addActiveSetToPickup() {
+      if (!this.activeSet) {
+        return;
+      }
+      const key = this.getSetCollectionKey(this.activeSet);
+      this.savePatchedSetByKey(key, (setItem) => {
+        let notes = setItem.notes || "";
+        notes = this.withMetaTokenInNotes(notes, "PICKUP", "1");
+        notes = this.withMetaTokenInNotes(notes, "PICKED", "0");
+        return {
+          ...setItem,
+          notes
+        };
+      }).then(() => this.refreshCloudState(true));
+    },
+    togglePickupChecked(itemId) {
+      this.savePatchedSetByKey(itemId, (setItem) => {
+        const currentlyPicked = this.isSetMarkedAsPicked(setItem);
+        let notes = setItem.notes || "";
+        notes = this.withMetaTokenInNotes(notes, "PICKUP", "1");
+        notes = this.withMetaTokenInNotes(notes, "PICKED", currentlyPicked ? "0" : "1");
+        return {
+          ...setItem,
+          notes
+        };
+      }).then(() => this.refreshCloudState(true));
+    },
+    removePickupEntry(itemId) {
+      this.savePatchedSetByKey(itemId, (setItem) => {
+        let notes = setItem.notes || "";
+        notes = this.withMetaTokenInNotes(notes, "PICKUP", "");
+        notes = this.withMetaTokenInNotes(notes, "PICKED", "");
+        return {
+          ...setItem,
+          notes
+        };
+      }).then(() => this.refreshCloudState(true));
+    },
+    async clearCheckedPickupEntries() {
+      const checkedItems = this.visiblePickupList.filter((item) => item.checked);
+      for (const item of checkedItems) {
+        await this.savePatchedSetByKey(item.id, (setItem) => {
+          let notes = setItem.notes || "";
+          notes = this.withMetaTokenInNotes(notes, "PICKUP", "");
+          notes = this.withMetaTokenInNotes(notes, "PICKED", "");
+          return {
+            ...setItem,
+            notes
+          };
+        });
+      }
+      await this.refreshCloudState(true);
+    },
+    openPickupSet(item) {
+      if (!item) {
+        return;
+      }
+
+      const match = this.findSetInCollection(item.rebrickableSetNumber || item.setNumber, item.ownerProfile);
+      if (match) {
+        this.openSet(match);
+        return;
+      }
+
+      this.currentView = "collection";
+      this.setRoute("/collection");
     },
     getBaseSetNumber(setNumber) {
       return String(setNumber || "")
@@ -650,9 +859,7 @@ createApp({
       this.currentView = "collection";
       this.setRoute("/collection");
       const targetScroll = Number(this.lastCollectionScrollY) || 0;
-      this.$nextTick(() => {
-        window.scrollTo({ top: targetScroll, behavior: "auto" });
-      });
+      this.restoreScrollPosition(targetScroll);
     },
     normalizeImagePath(imageUrl) {
       return String(imageUrl || "")
@@ -828,6 +1035,7 @@ createApp({
       this.activeSet = this.normalizeSetOwnership(setItem, setItem.ownerProfile);
       this.drawerOpen = false;
       this.currentView = "detail";
+      this.$nextTick(() => this.scrollToTop());
       this.setPartsRequested = false;
       this.setParts = [];
       this.setPartsPage = 0;
@@ -1374,9 +1582,33 @@ createApp({
       return this.parseBooleanCell(this.getSpreadsheetCell(row, ["tegning", "manual"]));
     },
     parseSpreadsheetStorage(row) {
-      return (
-        this.getSpreadsheetCell(row, ["saeknr", "sæk nr", "saek", "sæk", "lager", "pose"]) || ""
-      );
+      const raw = String(this.getSpreadsheetCell(row, ["saeknr", "sæk nr", "saek", "sæk", "lager", "pose"]) || "").trim();
+      if (!raw) {
+        return "";
+      }
+
+      if (/^hjemme$/i.test(raw)) {
+        return "Hjemme";
+      }
+
+      if (/^lager$/i.test(raw)) {
+        return "Lager";
+      }
+
+      const poseMatch =
+        raw.match(/^pose\s*(\d{1,3})$/i) ||
+        raw.match(/^pose[-\s]*(\d{1,3})$/i) ||
+        raw.match(/^(s[æa]k|kasse)\s*(nr)?[-\s:]*?(\d{1,3})$/i) ||
+        raw.match(/^(\d{1,3})$/);
+
+      if (poseMatch) {
+        const number = Number(poseMatch[poseMatch.length - 1]);
+        if (number > 0) {
+          return `Pose ${number}`;
+        }
+      }
+
+      return raw;
     },
     createImportedSetFromFile(row, rawSetNumber, remoteSet = null) {
       const setNumberFromFile = this.normalizeSpreadsheetSetNumber(rawSetNumber);
@@ -2126,6 +2358,15 @@ createApp({
             @load-inventory="loadOwnedPartsInventory(true)"
             @show-related-sets="showRelatedSetsForPart"
           />
+          <PickupListPage
+            v-else-if="currentView === 'pickup'"
+            :items="visiblePickupList"
+            :profile-name="currentProfile?.name || ''"
+            @toggle-item="togglePickupChecked"
+            @remove-item="removePickupEntry"
+            @open-set="openPickupSet"
+            @clear-checked="clearCheckedPickupEntries"
+          />
           <MissingPartsPage
             v-else-if="currentView === 'missing-parts'"
             :missing-parts="visibleMissingParts"
@@ -2161,12 +2402,14 @@ createApp({
             :related-part-sets-loading="relatedPartSetsLoading"
             :manual-opening="activeSetManualOpening"
             :manual-error="manualOpenError"
+            :in-pickup-list="activeSetInPickupList"
             @load-more-parts="loadMoreSetParts"
             @request-parts="loadInitialSetParts"
             @mark-missing="markPartAsMissing"
             @show-related-sets="showRelatedSetsForPart"
             @open-manual="openManual"
             @go-back="goBackFromSetDetail"
+            @add-to-pickup="addActiveSetToPickup"
             @update-set="updateSet"
             @remove-set="removeSetFromCollection"
           />

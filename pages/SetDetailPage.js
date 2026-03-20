@@ -2,6 +2,11 @@ import { SetPartCard } from "../components/SetPartCard.js";
 
 export const SetDetailPage = {
   components: { SetPartCard },
+  data() {
+    return {
+      notesExpanded: false
+    };
+  },
   props: {
     setItem: { type: Object, required: true },
     setParts: { type: Array, required: true },
@@ -12,7 +17,8 @@ export const SetDetailPage = {
     relatedPartSets: { type: Object, required: true },
     relatedPartSetsLoading: { type: Object, required: true },
     manualOpening: { type: Boolean, default: false },
-    manualError: { type: String, default: "" }
+    manualError: { type: String, default: "" },
+    inPickupList: { type: Boolean, default: false }
   },
   emits: [
     "load-more-parts",
@@ -21,6 +27,7 @@ export const SetDetailPage = {
     "show-related-sets",
     "open-manual",
     "go-back",
+    "add-to-pickup",
     "update-set",
     "remove-set"
   ],
@@ -48,22 +55,62 @@ export const SetDetailPage = {
     salePlatforms() {
       return ["Facebook Marketplace", "DBA", "Reshopper", "Loppemarked"];
     },
-    storageOptions() {
-      const bagOptions = Array.from({ length: 80 }, (_, index) => `Pose ${index + 1}`);
+    stockOptions() {
+      return ["Hjemme", "Lager"];
+    },
+    boxStorageOptions() {
+      const bagOptions = Array.from({ length: 50 }, (_, index) => `Pose ${index + 1}`);
+      const legacyBox = this.normalizeBoxStorageValue(this.readNoteMetaToken("BOX_LOC")) || this.deriveLegacyBoxLocation();
+      if (legacyBox && !bagOptions.includes(legacyBox) && legacyBox !== "Hjemme") {
+        return ["Hjemme", ...bagOptions, legacyBox];
+      }
       return ["Hjemme", ...bagOptions];
+    },
+    setStorageLocationValue() {
+      const raw = String(this.setItem.storageLocation || "").trim();
+      if (/^lager$/i.test(raw)) {
+        return "Lager";
+      }
+      return "Hjemme";
+    },
+    boxStorageLocation() {
+      const fromNotes = this.normalizeBoxStorageValue(this.readNoteMetaToken("BOX_LOC"));
+      if (fromNotes) {
+        return fromNotes;
+      }
+
+      const legacy = this.deriveLegacyBoxLocation();
+      if (legacy && this.boxStorageOptions.includes(legacy)) {
+        return legacy;
+      }
+
+      return "Hjemme";
+    },
+    manualStorageLocation() {
+      return this.readNoteMetaToken("MANUAL_LOC") || "Hjemme";
     },
     displayNotes() {
       return String(this.setItem.notes || "")
         .replace(/\s*\[QTY:\d+\]\s*/gi, " ")
+        .replace(/\s*\[(BOX_LOC|MANUAL_LOC):[^\]]*]\s*/gi, " ")
         .replace(/\s{2,}/g, " ")
         .trim();
     }
   },
   mounted() {
+    this.migrateLegacyBoxStorage();
     window.addEventListener("scroll", this.handleScroll, { passive: true });
   },
   beforeUnmount() {
     window.removeEventListener("scroll", this.handleScroll);
+  },
+  watch: {
+    setItem: {
+      deep: false,
+      handler() {
+        this.migrateLegacyBoxStorage();
+      }
+    }
   },
   methods: {
     toggleBoolean(field) {
@@ -114,16 +161,103 @@ export const SetDetailPage = {
         salePlatforms
       });
     },
-    setStorageLocation(event) {
+    setSetStorageLocation(event) {
       this.$emit("update-set", {
         ...this.setItem,
         storageLocation: event.target.value
       });
     },
+    normalizeBoxStorageValue(value) {
+      const raw = String(value || "").trim();
+      if (!raw) {
+        return "";
+      }
+
+      if (/^hjemme$/i.test(raw)) {
+        return "Hjemme";
+      }
+
+      const poseMatch =
+        raw.match(/^pose\s*(\d{1,3})$/i) ||
+        raw.match(/^pose[-\s]*(\d{1,3})$/i) ||
+        raw.match(/^(s[æa]k|kasse)\s*(nr)?[-\s:]*?(\d{1,3})$/i) ||
+        raw.match(/^(\d{1,3})$/);
+      if (poseMatch) {
+        const number = Number(poseMatch[poseMatch.length - 1]);
+        return number > 0 ? `Pose ${number}` : "";
+      }
+
+      return "";
+    },
+    deriveLegacyBoxLocation() {
+      const normalized = this.normalizeBoxStorageValue(this.setItem.storageLocation || "");
+      return normalized || "";
+    },
+    readNoteMetaToken(key) {
+      const pattern = new RegExp(`\\[${key}:([^\\]]*)\\]`, "i");
+      const match = String(this.setItem.notes || "").match(pattern);
+      return match ? String(match[1] || "").trim() : "";
+    },
+    withNoteMetaToken(key, value, baseNotes = this.setItem.notes || "") {
+      const cleaned = String(baseNotes || "")
+        .replace(new RegExp(`\\s*\\[${key}:[^\\]]*\\]\\s*`, "gi"), " ")
+        .replace(/\s{2,}/g, " ")
+        .trim();
+      const normalizedValue = String(value || "").trim();
+      if (!normalizedValue) {
+        return cleaned;
+      }
+      return `${cleaned}${cleaned ? " " : ""}[${key}:${normalizedValue}]`.trim();
+    },
+    mergeNotesWithMetaTokens(notesInputValue) {
+      const boxLocation = this.readNoteMetaToken("BOX_LOC");
+      const manualLocation = this.readNoteMetaToken("MANUAL_LOC");
+      let nextNotes = String(notesInputValue || "").trim();
+      nextNotes = this.withNoteMetaToken("BOX_LOC", boxLocation, nextNotes);
+      nextNotes = this.withNoteMetaToken("MANUAL_LOC", manualLocation, nextNotes);
+      return nextNotes;
+    },
+    migrateLegacyBoxStorage() {
+      const existingBoxToken = this.normalizeBoxStorageValue(this.readNoteMetaToken("BOX_LOC"));
+      if (existingBoxToken) {
+        return;
+      }
+
+      const legacyBoxLocation = this.deriveLegacyBoxLocation();
+      if (!legacyBoxLocation) {
+        return;
+      }
+
+      const nextNotes = this.withNoteMetaToken("BOX_LOC", legacyBoxLocation, this.setItem.notes || "");
+      if (nextNotes === String(this.setItem.notes || "")) {
+        return;
+      }
+
+      this.$emit("update-set", {
+        ...this.setItem,
+        notes: nextNotes
+      });
+    },
+    setBoxStorageLocation(event) {
+      const value = event.target.value;
+      const nextNotes = this.withNoteMetaToken("BOX_LOC", value, this.setItem.notes || "");
+      this.$emit("update-set", {
+        ...this.setItem,
+        notes: nextNotes
+      });
+    },
+    setManualStorageLocation(event) {
+      const value = event.target.value;
+      const nextNotes = this.withNoteMetaToken("MANUAL_LOC", value, this.setItem.notes || "");
+      this.$emit("update-set", {
+        ...this.setItem,
+        notes: nextNotes
+      });
+    },
     setNotes(event) {
       this.$emit("update-set", {
         ...this.setItem,
-        notes: event.target.value
+        notes: this.mergeNotesWithMetaTokens(event.target.value)
       });
     },
     handleScroll() {
@@ -150,6 +284,11 @@ export const SetDetailPage = {
           <div style="margin-bottom: 12px;">
             <button class="secondary-btn" @click="$emit('go-back')">← Tilbage til samling</button>
           </div>
+          <div style="margin-bottom: 12px;">
+            <button class="secondary-btn" :class="{ 'status-green': inPickupList }" @click="$emit('add-to-pickup')">
+              {{ inPickupList ? '✓ På afhentningslisten' : '+ Til afhentning' }}
+            </button>
+          </div>
           <div class="detail-heading">
             <div class="card-kicker">{{ setItem.setNumber }}</div>
             <h2>{{ setItem.name }}</h2>
@@ -174,20 +313,24 @@ export const SetDetailPage = {
               <strong>{{ setItem.buildStatus }}</strong>
             </div>
             <div>
-              <p>Kategori</p>
-              <strong>{{ setItem.theme || 'Ukendt' }}</strong>
-            </div>
-            <div>
               <p>Stand</p>
               <strong>{{ setItem.sealStatus || 'Åbnet' }}</strong>
             </div>
             <div>
-              <p>Lager</p>
-              <strong>{{ setItem.storageLocation || 'Ikke angivet' }}</strong>
+              <p>Sæt lager</p>
+              <strong>{{ setStorageLocationValue }}</strong>
+            </div>
+            <div>
+              <p>Kasse lager</p>
+              <strong>{{ boxStorageLocation }}</strong>
+            </div>
+            <div>
+              <p>Manual lager</p>
+              <strong>{{ manualStorageLocation }}</strong>
             </div>
           </div>
 
-          <div class="status-grid" style="margin-bottom: 16px;">
+          <div class="status-grid status-grid--single-row" style="margin-bottom: 16px;">
             <button
               v-for="status in statusButtons"
               :key="status.key"
@@ -231,25 +374,35 @@ export const SetDetailPage = {
           </div>
 
           <div class="detail-section">
-            <p class="detail-section-title">Kategori</p>
-            <input
+            <p class="detail-section-title">Sæt lager</p>
+            <select
               class="detail-input"
-              type="text"
-              :value="setItem.theme || 'Hentes automatisk fra LEGO data'"
-              placeholder="Hentes automatisk"
-              disabled
-            />
+              :value="setStorageLocationValue"
+              @change="setSetStorageLocation"
+            >
+              <option v-for="option in stockOptions" :key="'set-' + option" :value="option">{{ option }}</option>
+            </select>
           </div>
 
           <div class="detail-section">
-            <p class="detail-section-title">Lager / pose</p>
+            <p class="detail-section-title">Kasse lager</p>
             <select
               class="detail-input"
-              :value="setItem.storageLocation || ''"
-              @change="setStorageLocation"
+              :value="boxStorageLocation"
+              @change="setBoxStorageLocation"
             >
-              <option value="">Vælg placering</option>
-              <option v-for="option in storageOptions" :key="option" :value="option">{{ option }}</option>
+              <option v-for="option in boxStorageOptions" :key="'box-' + option" :value="option">{{ option }}</option>
+            </select>
+          </div>
+
+          <div class="detail-section">
+            <p class="detail-section-title">Manual lager</p>
+            <select
+              class="detail-input"
+              :value="manualStorageLocation"
+              @change="setManualStorageLocation"
+            >
+              <option v-for="option in stockOptions" :key="'manual-' + option" :value="option">{{ option }}</option>
             </select>
           </div>
 
@@ -297,11 +450,6 @@ export const SetDetailPage = {
           </div>
 
           <div class="manual-grid" style="margin-bottom: 16px;">
-            <span class="badge"><strong>Sætnummer:</strong> {{ setItem.setNumber }}</span>
-            <span class="badge">Tjek at sætnummer matcher</span>
-          </div>
-
-          <div class="manual-grid" style="margin-bottom: 16px;">
             <button
               class="manual-link"
               :class="{ 'manual-link--loading': manualOpening }"
@@ -319,11 +467,19 @@ export const SetDetailPage = {
             <strong>Noter</strong>
             <textarea
               class="detail-textarea"
+              :class="{ 'detail-textarea--compact': !notesExpanded }"
               style="margin-top: 8px;"
               :value="displayNotes"
               placeholder="Skriv en note om sættet her"
               @input="setNotes"
             ></textarea>
+            <button
+              class="secondary-btn"
+              style="margin-top: 8px;"
+              @click="notesExpanded = !notesExpanded"
+            >
+              {{ notesExpanded ? 'Vis mindre' : 'Udvid' }}
+            </button>
           </div>
 
           <div class="part-actions">
@@ -338,13 +494,13 @@ export const SetDetailPage = {
         <div v-if="!partsRequested && !partsLoading && !setParts.length && !partsError" class="empty-state">
           <strong>Klodslisten er ikke hentet endnu.</strong>
           <p>Tryk på knappen herunder for at hente klodser til dette sæt.</p>
-          <button class="primary-btn" @click="$emit('request-parts', setItem)">Hent klodsliste</button>
+          <button class="primary-btn detail-fetch-btn" @click="$emit('request-parts', setItem)">🧩 Hent klodsliste</button>
         </div>
 
         <div v-if="partsError" class="empty-state">
           <strong>Kunne ikke hente klodser.</strong>
           <p>{{ partsError }}</p>
-          <button class="secondary-btn" @click="$emit('request-parts', setItem)">Prøv igen</button>
+          <button class="secondary-btn detail-fetch-btn" @click="$emit('request-parts', setItem)">Prøv igen</button>
         </div>
 
         <div v-else-if="setParts.length" class="card-grid">

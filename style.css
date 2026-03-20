@@ -775,6 +775,13 @@ button:disabled {
   margin-bottom: 16px;
 }
 
+.status-grid--single-row {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 4px;
+}
+
 .sales-editor {
   display: grid;
   gap: 12px;
@@ -822,6 +829,18 @@ button:disabled {
   background: rgba(255, 255, 255, 0.92);
   color: var(--text);
   resize: vertical;
+}
+
+.detail-textarea--compact {
+  min-height: 84px;
+}
+
+.detail-fetch-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 8px;
 }
 
 .search-result-card__location {
@@ -1064,6 +1083,86 @@ button:disabled {
   gap: 12px;
 }
 
+.pickup-table {
+  display: grid;
+  gap: 8px;
+}
+
+.pickup-table__header,
+.pickup-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 0.75fr 2fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.86);
+}
+
+.pickup-table__header {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: rgba(255, 255, 255, 0.96);
+}
+
+.pickup-row {
+  font-size: 0.95rem;
+}
+
+.pickup-row--checked {
+  background: rgba(75, 169, 109, 0.2);
+  border-color: rgba(75, 169, 109, 0.35);
+}
+
+.pickup-row__status {
+  font-weight: 700;
+}
+
+.pickup-row__storage {
+  color: var(--muted);
+}
+
+.pickup-row__set {
+  font-family: "Space Grotesk", sans-serif;
+}
+
+.pickup-row__name {
+  border: 0;
+  background: transparent;
+  text-align: left;
+  color: var(--text);
+  cursor: pointer;
+  padding: 0;
+  min-height: 0;
+  font-weight: 700;
+}
+
+.pickup-row__name:hover {
+  text-decoration: underline;
+}
+
+.pickup-row__actions {
+  display: flex;
+  justify-self: end;
+  gap: 8px;
+}
+
+.pickup-row__toggle {
+  min-height: 38px;
+  min-width: 44px;
+  justify-content: center;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.pickup-table__check {
+  text-align: right;
+}
+
 @media (min-width: 1280px) {
   .app-shell {
     width: min(1680px, calc(100% - 40px));
@@ -1132,6 +1231,51 @@ button:disabled {
   .theme-grid,
   .profile-summary-grid {
     grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .pickup-table__header {
+    display: none;
+  }
+
+  .pickup-row {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      "status name actions"
+      "storage set actions";
+    gap: 4px 10px;
+    font-size: 0.86rem;
+    padding: 10px;
+  }
+
+  .pickup-row__status {
+    grid-area: status;
+  }
+
+  .pickup-row__name {
+    grid-area: name;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .pickup-row__actions {
+    grid-area: actions;
+    align-self: center;
+  }
+
+  .pickup-row__storage {
+    grid-area: storage;
+  }
+
+  .pickup-row__set {
+    grid-area: set;
+  }
+
+  .pickup-row__toggle {
+    min-width: 40px;
+    min-height: 34px;
   }
 }
 
@@ -1238,6 +1382,10 @@ button:disabled {
   .home-hero__badge {
     width: 76px;
     height: 76px;
+  }
+
+  .status-grid--single-row .status-chip {
+    white-space: nowrap;
   }
 
   .profile-stage {

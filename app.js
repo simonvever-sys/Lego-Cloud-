@@ -555,6 +555,45 @@ createApp({
       }
       return `${cleaned}${cleaned ? " " : ""}[${key}:${normalizedValue}]`.trim();
     },
+    normalizeBuildChecklist(value) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        return {};
+      }
+
+      return Object.entries(value).reduce((accumulator, [key, checked]) => {
+        const safeKey = String(key || "").trim();
+        if (safeKey && checked) {
+          accumulator[safeKey] = true;
+        }
+        return accumulator;
+      }, {});
+    },
+    parseBuildChecklistFromNotes(notes) {
+      const raw = this.extractMetaTokenFromNotes(notes, "BUILD_CHK");
+      if (!raw) {
+        return {};
+      }
+
+      return raw
+        .split(",")
+        .map((item) => String(item || "").trim())
+        .filter(Boolean)
+        .reduce((accumulator, key) => {
+          accumulator[key] = true;
+          return accumulator;
+        }, {});
+    },
+    serializeBuildChecklist(checklist) {
+      const keys = Object.entries(this.normalizeBuildChecklist(checklist))
+        .filter(([, checked]) => Boolean(checked))
+        .map(([key]) => key)
+        .sort((left, right) => left.localeCompare(right, "da"));
+      return keys.join(",");
+    },
+    withBuildChecklistInNotes(notes, checklist) {
+      const token = this.serializeBuildChecklist(checklist);
+      return this.withMetaTokenInNotes(notes, "BUILD_CHK", token);
+    },
     getSetCollectionKey(setItem) {
       return (
         setItem.collectionKey ||
@@ -633,12 +672,16 @@ createApp({
       const parsedPieces = Math.max(0, Number(setItem.pieces) || 0);
       const parsedYear = Number(setItem.year) || "";
       const existingNotes = String(setItem.notes || "");
+      const explicitChecklist = this.normalizeBuildChecklist(setItem.buildChecklist);
+      const checklistFromNotes = this.parseBuildChecklistFromNotes(existingNotes);
+      const buildChecklist = Object.keys(explicitChecklist).length ? explicitChecklist : checklistFromNotes;
       const boxFromNotes = this.extractMetaTokenFromNotes(existingNotes, "BOX_LOC");
       const legacyBoxLocation = boxFromNotes || this.normalizeLegacyBoxLocation(setItem.storageLocation);
       let normalizedNotes = this.embedQuantityInNotes(existingNotes, quantityOwned);
       if (legacyBoxLocation) {
         normalizedNotes = this.withMetaTokenInNotes(normalizedNotes, "BOX_LOC", legacyBoxLocation);
       }
+      normalizedNotes = this.withBuildChecklistInNotes(normalizedNotes, buildChecklist);
       return {
         ...setItem,
         ownerProfile,
@@ -650,6 +693,7 @@ createApp({
         askingPrice: Number(setItem.askingPrice) || 0,
         salePlatforms: Array.isArray(setItem.salePlatforms) ? setItem.salePlatforms : [],
         quantityOwned,
+        buildChecklist,
         notes: normalizedNotes
       };
     },

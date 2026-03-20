@@ -94,6 +94,7 @@ export const SetDetailPage = {
       return String(this.setItem.notes || "")
         .replace(/\s*\[QTY:\d+\]\s*/gi, " ")
         .replace(/\s*\[(BOX_LOC|MANUAL_LOC):[^\]]*]\s*/gi, " ")
+        .replace(/\s*\[BUILD_CHK:[^\]]*]\s*/gi, " ")
         .replace(/\s{2,}/g, " ")
         .trim();
     }
@@ -213,9 +214,11 @@ export const SetDetailPage = {
     mergeNotesWithMetaTokens(notesInputValue) {
       const boxLocation = this.readNoteMetaToken("BOX_LOC");
       const manualLocation = this.readNoteMetaToken("MANUAL_LOC");
+      const buildChecklist = this.readNoteMetaToken("BUILD_CHK");
       let nextNotes = String(notesInputValue || "").trim();
       nextNotes = this.withNoteMetaToken("BOX_LOC", boxLocation, nextNotes);
       nextNotes = this.withNoteMetaToken("MANUAL_LOC", manualLocation, nextNotes);
+      nextNotes = this.withNoteMetaToken("BUILD_CHK", buildChecklist, nextNotes);
       return nextNotes;
     },
     migrateLegacyBoxStorage() {

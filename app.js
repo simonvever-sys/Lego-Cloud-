@@ -31,6 +31,7 @@ import { MissingPartsPage } from "./pages/MissingPartsPage.js";
 import { ProfileSelectPage } from "./pages/ProfileSelectPage.js";
 import { ImportCollectionPage } from "./pages/ImportCollectionPage.js";
 import { PickupListPage } from "./pages/PickupListPage.js";
+import { BuildPage } from "./pages/BuildPage.js";
 
 const rebrickableClient = createRebrickableClient();
 const ROUTE_KEY = "lego-cloud:route";
@@ -41,6 +42,7 @@ const CLOUD_REFRESH_INTERVAL_MS = 45000;
 const CLOUD_REFRESH_MIN_GAP_MS = 15000;
 const SEARCH_TERM_DELAY_MS = 350;
 const CLOUD_FETCH_DELAY_MS = 180;
+const COLLECTION_METADATA_SYNC_DELAY_MS = 140;
 const PROFILES = [
   {
     id: "family",
@@ -128,7 +130,8 @@ createApp({
     MissingPartsPage,
     ProfileSelectPage,
     ImportCollectionPage,
-    PickupListPage
+    PickupListPage,
+    BuildPage
   },
   data() {
     return {
@@ -199,7 +202,8 @@ createApp({
       stopMissingPartsSync: null,
       cloudRefreshTimer: null,
       cloudRefreshInFlight: false,
-      cloudLastRefreshAt: 0
+      cloudLastRefreshAt: 0,
+      metadataSyncRunning: false
     };
   },
   computed: {
@@ -233,11 +237,17 @@ createApp({
     },
     collectionStats() {
       const ownedSets = this.visibleSets.filter((setItem) => setItem.owned);
-      const totalPieces = ownedSets.reduce((sum, setItem) => sum + setItem.pieces, 0);
+      const totalPieces = ownedSets.reduce((sum, setItem) => {
+        const piecesPerSet = Math.max(0, Number(setItem.pieces) || 0);
+        const quantityOwned = Math.max(1, Number(setItem.quantityOwned) || 1);
+        return sum + piecesPerSet * quantityOwned;
+      }, 0);
       const themeMap = ownedSets.reduce((map, setItem) => {
         const current = map.get(setItem.theme) || { name: setItem.theme, count: 0, pieces: 0 };
-        current.count += 1;
-        current.pieces += setItem.pieces;
+        const quantityOwned = Math.max(1, Number(setItem.quantityOwned) || 1);
+        const piecesPerSet = Math.max(0, Number(setItem.pieces) || 0);
+        current.count += quantityOwned;
+        current.pieces += piecesPerSet * quantityOwned;
         map.set(setItem.theme, current);
         return map;
       }, new Map());
@@ -257,8 +267,12 @@ createApp({
             ? this.sets
             : this.sets.filter((setItem) => setItem.ownerProfile === profile.id);
         accumulator[profile.id] = {
-          count: profileSets.length,
-          pieces: profileSets.reduce((sum, setItem) => sum + (setItem.pieces || 0), 0)
+          count: profileSets.reduce((sum, setItem) => sum + Math.max(1, Number(setItem.quantityOwned) || 1), 0),
+          pieces: profileSets.reduce((sum, setItem) => {
+            const piecesPerSet = Math.max(0, Number(setItem.pieces) || 0);
+            const quantityOwned = Math.max(1, Number(setItem.quantityOwned) || 1);
+            return sum + piecesPerSet * quantityOwned;
+          }, 0)
         };
         return accumulator;
       }, {});
@@ -341,7 +355,8 @@ createApp({
         stats: "Statistik",
         settings: "Indstillinger",
         "import-collection": "Importer samling",
-        detail: "Sæt"
+        detail: "Sæt",
+        build: "Byg"
       };
       return titles[this.currentView] || this.currentProfile?.name || "LEGO Cloud";
     },
@@ -414,6 +429,7 @@ createApp({
     }
     await resetCollectionOnce();
     await this.refreshCloudState(true);
+    this.syncCollectionMetadataFromApi();
     this.startRealtimeSync();
     await this.restoreRoute();
     window.addEventListener("hashchange", this.restoreRoute);
@@ -466,6 +482,51 @@ createApp({
         this.cloudLastRefreshAt = Date.now();
       } finally {
         this.cloudRefreshInFlight = false;
+      }
+    },
+    async syncCollectionMetadataFromApi() {
+      if (this.metadataSyncRunning || !this.sets.length) {
+        return;
+      }
+
+      this.metadataSyncRunning = true;
+      let changed = false;
+
+      try {
+        // Snapshot så vi kan opdatere stabilt, selv om listen ændres undervejs.
+        const snapshot = [...this.sets];
+
+        for (const currentSet of snapshot) {
+          const setNumber = currentSet.rebrickableSetNumber || currentSet.setNumber;
+          if (!setNumber) {
+            continue;
+          }
+
+          const remoteSet = await this.fetchBestRemoteSet(setNumber);
+          if (!remoteSet) {
+            continue;
+          }
+
+          const merged = this.normalizeSetOwnership(
+            this.mergeSetWithRemoteMetadata(currentSet, remoteSet),
+            currentSet.ownerProfile
+          );
+
+          if (!this.hasMetadataDiff(currentSet, merged)) {
+            continue;
+          }
+
+          const key = this.getSetCollectionKey(currentSet);
+          await this.savePatchedSetByKey(key, () => merged);
+          changed = true;
+          await this.delay(COLLECTION_METADATA_SYNC_DELAY_MS);
+        }
+      } finally {
+        this.metadataSyncRunning = false;
+      }
+
+      if (changed) {
+        await this.refreshCloudState(true);
       }
     },
     profileCollectionKey(ownerProfile, setNumber) {
@@ -569,6 +630,8 @@ createApp({
       const ownerProfile = setItem.ownerProfile || fallbackOwnerProfile;
       const setNumber = setItem.rebrickableSetNumber || setItem.setNumber;
       const quantityOwned = Math.max(1, Number(setItem.quantityOwned) || this.parseQuantityFromNotes(setItem.notes));
+      const parsedPieces = Math.max(0, Number(setItem.pieces) || 0);
+      const parsedYear = Number(setItem.year) || "";
       const existingNotes = String(setItem.notes || "");
       const boxFromNotes = this.extractMetaTokenFromNotes(existingNotes, "BOX_LOC");
       const legacyBoxLocation = boxFromNotes || this.normalizeLegacyBoxLocation(setItem.storageLocation);
@@ -581,6 +644,8 @@ createApp({
         ownerProfile,
         collectionKey: setItem.collectionKey || this.profileCollectionKey(ownerProfile, setNumber),
         storageLocation: /^lager$/i.test(String(setItem.storageLocation || "").trim()) ? "Lager" : "Hjemme",
+        pieces: parsedPieces,
+        year: parsedYear,
         image: this.resolveSetImage(setItem),
         askingPrice: Number(setItem.askingPrice) || 0,
         salePlatforms: Array.isArray(setItem.salePlatforms) ? setItem.salePlatforms : [],
@@ -693,6 +758,34 @@ createApp({
     },
     async restoreRoute() {
       const path = getRoutePath();
+      const buildMatchWithProfile = path.match(/^\/set\/([^/]+)\/(.+)\/build$/);
+      const buildLegacyMatch = path.match(/^\/set\/(.+)\/build$/);
+      const buildMatch = buildMatchWithProfile || buildLegacyMatch;
+      if (buildMatch) {
+        const profileId = buildMatchWithProfile ? buildMatch[1] : "";
+        const requestedSetNumber = buildMatchWithProfile ? buildMatch[2] : buildMatch[1];
+        const localSet = this.findSetInCollection(requestedSetNumber, profileId);
+
+        try {
+          const remoteSet = await rebrickableClient.getSet(requestedSetNumber);
+          const setItem = localSet ? this.mergeSetWithRemoteMetadata(localSet, remoteSet) : remoteSet;
+          this.activeSet = this.normalizeSetOwnership(setItem, localSet?.ownerProfile || this.activeProfileId || "shared");
+          this.currentView = "build";
+          this.$nextTick(() => this.scrollToTop());
+          await this.ensureSetMetadataFromApi(this.activeSet);
+        } catch {
+          if (localSet) {
+            this.activeSet = this.normalizeSetOwnership(localSet, localSet.ownerProfile || this.activeProfileId || "shared");
+            this.currentView = "build";
+            this.$nextTick(() => this.scrollToTop());
+            await this.ensureSetMetadataFromApi(this.activeSet);
+          } else {
+            this.currentView = "search";
+          }
+        }
+        return;
+      }
+
       const matchWithProfile = path.match(/^\/set\/([^/]+)\/(.+)$/);
       const legacyMatch = path.match(/^\/set\/(.+)$/);
       const match = matchWithProfile || legacyMatch;
@@ -861,6 +954,36 @@ createApp({
       const targetScroll = Number(this.lastCollectionScrollY) || 0;
       this.restoreScrollPosition(targetScroll);
     },
+    openBuildForActiveSet() {
+      if (!this.activeSet) {
+        return;
+      }
+      this.currentView = "build";
+      this.setRoute(`/set/${this.activeSet.ownerProfile || "shared"}/${this.activeSet.setNumber}/build`);
+      this.$nextTick(() => this.scrollToTop());
+    },
+    goBackFromBuild() {
+      if (!this.activeSet) {
+        this.currentView = "collection";
+        this.setRoute("/collection");
+        return;
+      }
+
+      this.currentView = "detail";
+      this.setRoute(`/set/${this.activeSet.ownerProfile || "shared"}/${this.activeSet.setNumber}`);
+      this.$nextTick(() => this.scrollToTop());
+    },
+    updateBuildChecklist(nextChecklist) {
+      if (!this.activeSet) {
+        return;
+      }
+
+      const key = this.getSetCollectionKey(this.activeSet);
+      this.savePatchedSetByKey(key, (setItem) => ({
+        ...setItem,
+        buildChecklist: nextChecklist && typeof nextChecklist === "object" ? nextChecklist : {}
+      })).then(() => this.refreshCloudState(true));
+    },
     normalizeImagePath(imageUrl) {
       return String(imageUrl || "")
         .trim()
@@ -922,10 +1045,11 @@ createApp({
       const currentName = String(setItem?.name || "").trim();
       const currentTheme = String(setItem?.theme || "").trim();
       const currentYear = Number(setItem?.year) || 0;
-      const currentPieces = Number(setItem?.pieces) || 0;
       const isPlaceholderName = /^lego s[æa]t\s+\d+/i.test(currentName);
       const resolvedTheme = String(remoteSet?.theme || remoteSet?.themeName || "").trim();
       const fallbackSetNumber = String(setItem?.setNumber || remoteSet?.setNumber || "").split("-")[0];
+      const remotePieces = Math.max(0, Number(remoteSet?.pieces) || 0);
+      const remoteYear = Number(remoteSet?.year) || 0;
 
       return {
         ...setItem,
@@ -934,11 +1058,28 @@ createApp({
           setItem?.rebrickableSetNumber || remoteSet?.rebrickableSetNumber || remoteSet?.setNumber || "",
         name: !currentName || isPlaceholderName ? remoteSet?.name || currentName : currentName,
         theme: currentTheme || resolvedTheme,
-        year: currentYear > 0 ? currentYear : remoteSet?.year || "",
-        pieces: currentPieces > 0 ? currentPieces : Number(remoteSet?.pieces) || 0,
+        year: remoteYear > 0 ? remoteYear : currentYear || "",
+        pieces: remotePieces > 0 ? remotePieces : Math.max(0, Number(setItem?.pieces) || 0),
         image: this.resolveSetImage(setItem, remoteSet),
         manualUrl: setItem?.manualUrl || remoteSet?.manualUrl || ""
       };
+    },
+    hasMetadataDiff(currentSet, nextSet) {
+      const fields = ["name", "theme", "manualUrl", "image", "rebrickableSetNumber", "setNumber"];
+      const hasPrimitiveDiff = fields.some((field) => String(currentSet?.[field] || "") !== String(nextSet?.[field] || ""));
+      if (hasPrimitiveDiff) {
+        return true;
+      }
+
+      const currentYear = Number(currentSet?.year) || 0;
+      const nextYear = Number(nextSet?.year) || 0;
+      if (currentYear !== nextYear) {
+        return true;
+      }
+
+      const currentPieces = Math.max(0, Number(currentSet?.pieces) || 0);
+      const nextPieces = Math.max(0, Number(nextSet?.pieces) || 0);
+      return currentPieces !== nextPieces;
     },
     async fetchBestRemoteSet(setNumber) {
       if (!setNumber) {
@@ -1007,10 +1148,6 @@ createApp({
         return;
       }
 
-      if (!this.isSetMetadataMissing(setItem)) {
-        return;
-      }
-
       const setNumber = setItem.rebrickableSetNumber || setItem.setNumber;
       if (!setNumber) {
         return;
@@ -1023,7 +1160,9 @@ createApp({
       }
 
       const hydratedSet = this.mergeSetWithRemoteMetadata(setItem, remoteSet);
-      this.updateSet(hydratedSet);
+      if (this.hasMetadataDiff(setItem, hydratedSet) || this.isSetMetadataMissing(setItem)) {
+        this.updateSet(hydratedSet);
+      }
     },
     async openSet(setItem) {
       this.lastViewBeforeDetail = this.currentView || "collection";
@@ -2390,6 +2529,18 @@ createApp({
             @select-file="selectImportFile"
             @start-import="startBulkImport"
           />
+          <BuildPage
+            v-else-if="currentView === 'build'"
+            :set-item="activeSet"
+            :set-parts="setParts"
+            :parts-loading="setPartsLoading"
+            :parts-error="setPartsError"
+            :parts-requested="setPartsRequested"
+            @back-to-detail="goBackFromBuild"
+            @request-parts="loadInitialSetParts"
+            @update-checklist="updateBuildChecklist"
+            @open-manual="openManual"
+          />
           <SetDetailPage
             v-else-if="currentView === 'detail'"
             :set-item="activeSet"
@@ -2408,6 +2559,7 @@ createApp({
             @mark-missing="markPartAsMissing"
             @show-related-sets="showRelatedSetsForPart"
             @open-manual="openManual"
+            @open-build="openBuildForActiveSet"
             @go-back="goBackFromSetDetail"
             @add-to-pickup="addActiveSetToPickup"
             @update-set="updateSet"

@@ -1,6 +1,6 @@
 # LEGO Samlingssystem
 
-Simpel Vue-baseret prototype af en LEGO webapp med:
+Vue-baseret LEGO webapp med:
 
 - touch-venlig hovedmenu
 - kortbaseret samlingsvisning
@@ -8,7 +8,7 @@ Simpel Vue-baseret prototype af en LEGO webapp med:
 - klodsesogning
 - salgshistorik
 - statistik og samlingskort
-- plads til scanner og automatisk datahentning
+- byggevisning med afkrydsning pr. klods
 
 ## Kørsel
 
@@ -18,7 +18,7 @@ Projektet er lavet uden build-step.
 2. Saet `window.LEGO_APP_CONFIG.supabase.url` og `window.LEGO_APP_CONFIG.supabase.anonKey` i [index.html](/Users/simonvever/Desktop/Lego%20cloud/index.html).
 3. Aktivér Supabase Realtime for tabellerne `collection` og `missing_parts`, hvis ændringer skal dukke op med det samme på flere enheder.
 4. Opret en public Supabase Storage bucket med navnet `manuals`, hvis du vil dele egne PDF-manualer mellem enheder.
-5. Deploy mappen direkte til Vercel som et statisk site.
+5. Appen kan deployes direkte som statisk site (fx GitHub Pages eller Vercel).
 
 ## Struktur
 
@@ -30,16 +30,15 @@ Projektet er lavet uden build-step.
 - [pages/PartsPage.js](/Users/simonvever/Desktop/Lego%20cloud/pages/PartsPage.js): klodsesogning
 - [pages/SalesPage.js](/Users/simonvever/Desktop/Lego%20cloud/pages/SalesPage.js): salgsvisning
 - [pages/StatsPage.js](/Users/simonvever/Desktop/Lego%20cloud/pages/StatsPage.js): statistik
-- [pages/AddSetPage.js](/Users/simonvever/Desktop/Lego%20cloud/pages/AddSetPage.js): manuel indtastning og scanner-placeholder
-- [api/rebrickable.js](/Users/simonvever/Desktop/Lego%20cloud/api/rebrickable.js): API-wrapper placeholder
+- [pages/BuildPage.js](/Users/simonvever/Desktop/Lego%20cloud/pages/BuildPage.js): byg-side med klodscheckliste
+- [api/rebrickable.js](/Users/simonvever/Desktop/Lego%20cloud/api/rebrickable.js): Rebrickable API-wrapper
 - [api/supabase.js](/Users/simonvever/Desktop/Lego%20cloud/api/supabase.js): Supabase-konfiguration og schema-blueprint
 
 ## Naeste skridt
 
-- Erstat mock-data i [data/mockData.js](/Users/simonvever/Desktop/Lego%20cloud/data/mockData.js) med Supabase-data.
-- Tilfoej rigtig Rebrickable API-key i [api/rebrickable.js](/Users/simonvever/Desktop/Lego%20cloud/api/rebrickable.js).
-- Tilfoej scanner via `BarcodeDetector` eller ekstern library i [pages/AddSetPage.js](/Users/simonvever/Desktop/Lego%20cloud/pages/AddSetPage.js).
+- Tilfoej rigtig Rebrickable API-key i [api/rebrickable.js](/Users/simonvever/Desktop/Lego%20cloud/api/rebrickable.js) eller brug Supabase-proxy.
 - Tilfoej Supabase auth, hvis flere brugere skal have egne samlinger.
+- Overvej E2E-tests af kritiske flows (saetdetalje, byg, afhentning, import).
 
 ## Supabase noter
 

@@ -26,6 +26,7 @@ export const SetDetailPage = {
     "mark-missing",
     "show-related-sets",
     "open-manual",
+    "open-build",
     "go-back",
     "add-to-pickup",
     "update-set",
@@ -288,6 +289,9 @@ export const SetDetailPage = {
             <button class="secondary-btn" :class="{ 'status-green': inPickupList }" @click="$emit('add-to-pickup')">
               {{ inPickupList ? '✓ På afhentningslisten' : '+ Til afhentning' }}
             </button>
+          </div>
+          <div style="margin-bottom: 12px;">
+            <button class="secondary-btn" @click="$emit('open-build')">🛠️ Byg</button>
           </div>
           <div class="detail-heading">
             <div class="card-kicker">{{ setItem.setNumber }}</div>

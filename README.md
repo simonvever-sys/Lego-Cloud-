@@ -37,7 +37,7 @@ Efter første deploy:
 - Hver gang du laver `git push` til branchen, laver Vercel automatisk ny deploy.
 - I Vercel kan du se status under `Deployments`.
 
-`vercel.json` er tilføjet for at sikre statisk routing uden server.
+Denne app bruger hash-routing (`#...`), så `vercel.json` rewrites er ikke nødvendige.
 
 ## Struktur
 

@@ -4,7 +4,7 @@ import {
   getManualUrl,
   isPdfUrl,
   normalizeSetNumber
-} from "../api/manuals.js";
+} from "../lib/manuals.js";
 
 export const ManualViewer = {
   props: {

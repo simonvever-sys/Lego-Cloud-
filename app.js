@@ -8,17 +8,17 @@ import {
   saveCollectionSet,
   resetCollection,
   resetCollectionOnce
-} from "./api/collectionStore.js";
-import { createRebrickableClient, getLegoInstructionsUrl, getSetImageUrl, normalizeSetNumber } from "./api/rebrickable.js";
-import { addMissingPart, loadMissingParts, resetMissingParts, resolveMissingPart } from "./api/missingPartsStore.js";
-import { deriveSalesFromSets, resetSales } from "./api/salesStore.js";
+} from "./lib/collectionStore.js";
+import { createRebrickableClient, getLegoInstructionsUrl, getSetImageUrl, normalizeSetNumber } from "./lib/rebrickable.js";
+import { addMissingPart, loadMissingParts, resetMissingParts, resolveMissingPart } from "./lib/missingPartsStore.js";
+import { deriveSalesFromSets, resetSales } from "./lib/salesStore.js";
 import {
   getManualStorageUrl,
   hasSupabaseConfig,
   subscribeToCollectionChanges,
   subscribeToMissingPartsChanges,
   uploadManualToStorage
-} from "./api/supabase.js";
+} from "./lib/supabase.js";
 import { HomePage } from "./pages/HomePage.js";
 import { CollectionPage } from "./pages/CollectionPage.js";
 import { SetDetailPage } from "./pages/SetDetailPage.js";

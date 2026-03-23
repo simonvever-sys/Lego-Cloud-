@@ -989,20 +989,32 @@ createApp({
       const normalized = this.getBaseSetNumber(setNumber);
       return normalized ? `https://www.lego.com/en-us/service/buildinginstructions/${normalized}` : "";
     },
+    buildBrickerDirectPdfUrl(setNumber) {
+      const baseSetNumber = this.getBaseSetNumber(setNumber);
+      if (!baseSetNumber) {
+        return "";
+      }
+
+      const bucket = baseSetNumber.slice(0, 2);
+      return `https://bricker.info/instructions/download/LEGO/${encodeURIComponent(bucket)}/${encodeURIComponent(baseSetNumber)}/${encodeURIComponent(baseSetNumber)}.pdf`;
+    },
     openManual(setNumber) {
       const baseSetNumber = this.getBaseSetNumber(setNumber);
       if (!baseSetNumber) {
         this.manualOpenError = "Manual ikke fundet.";
         return;
       }
-      const url = this.buildOfficialManualUrl(baseSetNumber);
-      if (!url) {
+      const legoUrl = this.buildOfficialManualUrl(baseSetNumber);
+      if (!legoUrl) {
         this.manualOpenError = "Manual ikke fundet.";
         return;
       }
-      this.manualOpenError = "";
+      const isSet857 = baseSetNumber === "857";
+      const targetUrl = isSet857 ? this.buildBrickerDirectPdfUrl(baseSetNumber) || legoUrl : legoUrl;
+
+      this.manualOpenError = isSet857 ? "Sæt 857 åbnes via alternativ manualkilde." : "";
       this.manualOpeningSetNumber = baseSetNumber;
-      window.open(url, "_blank", "noopener,noreferrer");
+      window.open(targetUrl, "_blank", "noopener,noreferrer");
       window.setTimeout(() => {
         if (this.manualOpeningSetNumber === baseSetNumber) {
           this.manualOpeningSetNumber = "";

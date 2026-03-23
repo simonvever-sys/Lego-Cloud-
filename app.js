@@ -175,6 +175,7 @@ createApp({
       missingParts: [],
       setParts: [],
       setPartsPage: 0,
+      setPartsExpectedCount: 0,
       hasMoreSetParts: false,
       setPartsLoading: false,
       setPartsError: "",
@@ -816,13 +817,27 @@ createApp({
           this.activeSet = this.normalizeSetOwnership(setItem, localSet?.ownerProfile || this.activeProfileId || "shared");
           this.currentView = "build";
           this.$nextTick(() => this.scrollToTop());
+          this.setPartsRequested = false;
+          this.setParts = [];
+          this.setPartsPage = 0;
+          this.setPartsExpectedCount = 0;
+          this.hasMoreSetParts = false;
+          this.setPartsError = "";
           await this.ensureSetMetadataFromApi(this.activeSet);
+          this.loadAllSetParts(this.activeSet);
         } catch {
           if (localSet) {
             this.activeSet = this.normalizeSetOwnership(localSet, localSet.ownerProfile || this.activeProfileId || "shared");
             this.currentView = "build";
             this.$nextTick(() => this.scrollToTop());
+            this.setPartsRequested = false;
+            this.setParts = [];
+            this.setPartsPage = 0;
+            this.setPartsExpectedCount = 0;
+            this.hasMoreSetParts = false;
+            this.setPartsError = "";
             await this.ensureSetMetadataFromApi(this.activeSet);
+            this.loadAllSetParts(this.activeSet);
           } else {
             this.currentView = "search";
           }
@@ -847,6 +862,7 @@ createApp({
           this.setPartsRequested = false;
           this.setParts = [];
           this.setPartsPage = 0;
+          this.setPartsExpectedCount = 0;
           this.hasMoreSetParts = false;
           this.setPartsError = "";
           await this.ensureSetMetadataFromApi(this.activeSet);
@@ -858,6 +874,7 @@ createApp({
             this.setPartsRequested = false;
             this.setParts = [];
             this.setPartsPage = 0;
+            this.setPartsExpectedCount = 0;
             this.hasMoreSetParts = false;
             this.setPartsError = "";
             await this.ensureSetMetadataFromApi(this.activeSet);
@@ -1005,6 +1022,20 @@ createApp({
       this.currentView = "build";
       this.setRoute(`/set/${this.activeSet.ownerProfile || "shared"}/${this.activeSet.setNumber}/build`);
       this.$nextTick(() => this.scrollToTop());
+
+      if (this.setPartsLoading) {
+        return;
+      }
+
+      if (!this.setPartsRequested || !this.setParts.length || this.setPartsError) {
+        this.setPartsRequested = true;
+        this.loadAllSetParts(this.activeSet);
+        return;
+      }
+
+      if (this.hasMoreSetParts) {
+        this.loadRemainingSetParts(this.activeSet);
+      }
     },
     goBackFromBuild() {
       if (!this.activeSet) {
@@ -1222,6 +1253,7 @@ createApp({
       this.setPartsRequested = false;
       this.setParts = [];
       this.setPartsPage = 0;
+      this.setPartsExpectedCount = 0;
       this.hasMoreSetParts = false;
       this.setPartsError = "";
       this.setRoute(`/set/${setItem.ownerProfile || "shared"}/${setItem.setNumber}`);
@@ -2303,6 +2335,7 @@ createApp({
       this.inventoryError = "";
       this.inventoryProgress = { done: 0, total: 0 };
       this.setParts = [];
+      this.setPartsExpectedCount = 0;
       this.setPartsError = "";
       this.relatedPartSets = {};
       this.relatedPartSetsLoading = {};
@@ -2319,9 +2352,29 @@ createApp({
       this.setPartsRequested = true;
       this.setParts = [];
       this.setPartsPage = 0;
+      this.setPartsExpectedCount = 0;
       this.hasMoreSetParts = true;
       this.setPartsError = "";
       await this.loadMoreSetParts(setItem);
+    },
+    async loadAllSetParts(setItem = this.activeSet) {
+      await this.loadInitialSetParts(setItem);
+      await this.loadRemainingSetParts(setItem);
+    },
+    async loadRemainingSetParts(setItem = this.activeSet) {
+      if (!setItem) {
+        return;
+      }
+
+      while (this.hasMoreSetParts && !this.setPartsError) {
+        await this.loadMoreSetParts(setItem);
+      }
+
+      const expected = Math.max(0, Number(this.setPartsExpectedCount) || 0);
+      const loaded = this.setParts.length;
+      if (!this.setPartsError && expected > 0 && loaded < expected) {
+        this.setPartsError = `Klodslisten ser ufuldstændig ud (${loaded}/${expected}). Prøv at hente igen.`;
+      }
     },
     async loadMoreSetParts(setItem = this.activeSet) {
       if (this.setPartsLoading || !this.hasMoreSetParts || !setItem) {
@@ -2344,6 +2397,7 @@ createApp({
 
         this.setParts = [...this.setParts, ...response.results];
         this.setPartsPage = nextPage;
+        this.setPartsExpectedCount = Math.max(this.setPartsExpectedCount, Number(response.count) || 0);
         this.hasMoreSetParts = Boolean(response.next);
       } catch (error) {
         const message = String(error?.message || "");
@@ -2359,6 +2413,7 @@ createApp({
             );
             this.setParts = [...this.setParts, ...fallbackResponse.results];
             this.setPartsPage = 1;
+            this.setPartsExpectedCount = Math.max(this.setPartsExpectedCount, Number(fallbackResponse.count) || 0);
             this.hasMoreSetParts = Boolean(fallbackResponse.next);
             this.setPartsError = "";
             return;
@@ -2581,7 +2636,7 @@ createApp({
             :parts-error="setPartsError"
             :parts-requested="setPartsRequested"
             @back-to-detail="goBackFromBuild"
-            @request-parts="loadInitialSetParts"
+            @request-parts="loadAllSetParts"
             @update-checklist="updateBuildChecklist"
             @open-manual="openManual"
           />
